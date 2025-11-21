@@ -55,6 +55,19 @@ export class HttpExecutor {
   }
 
   private convertPostmanToAxios(postmanRequest: PostmanRequest): AxiosRequestConfig {
+    // Validate request structure
+    if (!postmanRequest.request) {
+      throw new Error(
+        'Invalid request format: missing "request" property. Expected structure: {request: {url: ..., method: ..., header: [...], body: {...}}}'
+      );
+    }
+
+    if (!postmanRequest.request.url) {
+      throw new Error(
+        'Invalid request format: missing "url" property in request. Expected structure: {request: {url: ..., method: ..., header: [...], body: {...}}}'
+      );
+    }
+
     const url = this.buildUrl(postmanRequest.request.url);
     const headers: Record<string, string> = {};
 
@@ -74,9 +87,21 @@ export class HttpExecutor {
           // Keep as string if not JSON
         }
       } else if (postmanRequest.request.body.mode === 'urlencoded') {
-        data = postmanRequest.request.body.urlencoded;
+        // Convert Postman's urlencoded array format to object for axios
+        if (postmanRequest.request.body.urlencoded) {
+          data = postmanRequest.request.body.urlencoded.reduce((acc, item) => {
+            acc[item.key] = item.value;
+            return acc;
+          }, {} as Record<string, string>);
+        }
       } else if (postmanRequest.request.body.mode === 'formdata') {
-        data = postmanRequest.request.body.formdata;
+        // Convert Postman's formdata array format to object for axios
+        if (postmanRequest.request.body.formdata) {
+          data = postmanRequest.request.body.formdata.reduce((acc, item) => {
+            acc[item.key] = item.value;
+            return acc;
+          }, {} as Record<string, string>);
+        }
       }
     }
 

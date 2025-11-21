@@ -34,13 +34,13 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'execute_api_request',
     description:
-      'Executes an HTTP API request and returns the response including status code, headers, body, and error details',
+      'Executes an HTTP API request and returns the response including status code, headers, body, and error details. IMPORTANT: Pass the FULL PostmanRequest object structure including the outer wrapper. Example format: {"name":"Request Name","request":{"method":"POST","url":{"raw":"https://api.example.com/endpoint"},"header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\\"field\\":\\"value\\"}"}}}',
     input_schema: {
       type: 'object',
       properties: {
         request_json: {
           type: 'string',
-          description: 'JSON string of the Postman request object to execute',
+          description: 'JSON string of the complete Postman request object. Must include the outer wrapper with "request" property containing url, method, header, and body fields.',
         },
       },
       required: ['request_json'],
