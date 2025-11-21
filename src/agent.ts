@@ -1,0 +1,133 @@
+import Anthropic from '@anthropic-ai/sdk';
+import { AgentTools, toolDefinitions } from './tools/agentTools.js';
+
+const SYSTEM_PROMPT = `You are an API Self-Healing Agent. Your job is to automatically repair broken API requests in Postman collections.
+
+Your workflow:
+1. Fetch the broken request from Postman using the collection_id and request_id
+2. Execute the request against the target API
+3. If it fails with a format error (400 or 422 status codes):
+   - Analyze the error response to understand what's wrong
+   - Search the API documentation using Parallel AI to find the correct format
+   - Fix ONLY the headers and body of the request (preserve method, URL, etc.)
+   - Retry the request
+4. Repeat step 3 until the request succeeds or you've tried 5 times
+5. Once successful, update the Postman collection with the corrected request
+
+Important rules:
+- Only fix format-related errors (malformed data, incorrect fields, validation errors)
+- Do NOT modify the HTTP method or URL
+- Do NOT fix authentication errors or other non-format issues
+- Be methodical: analyze the error, search docs, make targeted fixes
+- Always explain what you're doing and why
+
+You have access to these tools:
+- fetch_postman_request: Get a request from Postman
+- execute_api_request: Execute an HTTP request
+- search_api_docs: Search API documentation via Parallel AI
+- update_postman_request: Save the fixed request back to Postman`;
+
+export class ApiSelfHealingAgent {
+  private client: Anthropic;
+  private tools: AgentTools;
+  private maxIterations: number;
+  private model: string;
+
+  constructor(
+    anthropicApiKey: string,
+    tools: AgentTools,
+    model: string = 'claude-3-5-sonnet-20241022',
+    maxIterations: number = 10
+  ) {
+    this.client = new Anthropic({ apiKey: anthropicApiKey });
+    this.tools = tools;
+    this.model = model;
+    this.maxIterations = maxIterations;
+  }
+
+  async heal(collectionId: string, requestId: string): Promise<string> {
+    console.log('\n🤖 Starting API Self-Healing Agent...\n');
+
+    const initialPrompt = `Please fix the broken API request in Postman collection "${collectionId}", request ID "${requestId}".
+
+Follow your workflow to:
+1. Fetch the request
+2. Execute it to see what's wrong
+3. If it's a format error, search the docs and fix it
+4. Keep trying until it works (max 5 attempts)
+5. Update Postman with the corrected version
+
+Begin now.`;
+
+    let messages: Anthropic.MessageParam[] = [
+      { role: 'user', content: initialPrompt },
+    ];
+
+    let iteration = 0;
+
+    while (iteration < this.maxIterations) {
+      iteration++;
+      console.log(`\n--- Iteration ${iteration} ---\n`);
+
+      const response = await this.client.messages.create({
+        model: this.model,
+        max_tokens: 4096,
+        system: SYSTEM_PROMPT,
+        messages,
+        tools: toolDefinitions,
+      });
+
+      console.log(`Assistant: ${this.extractTextContent(response.content)}\n`);
+
+      if (response.stop_reason === 'end_turn') {
+        console.log('\n✅ Agent completed successfully!\n');
+        return this.extractTextContent(response.content);
+      }
+
+      if (response.stop_reason === 'tool_use') {
+        const toolResults: Anthropic.MessageParam = {
+          role: 'user',
+          content: [],
+        };
+
+        for (const block of response.content) {
+          if (block.type === 'tool_use') {
+            console.log(`🔧 Using tool: ${block.name}`);
+            console.log(`   Input: ${JSON.stringify(block.input, null, 2)}\n`);
+
+            const result = await this.tools.executeTool(block.name, block.input);
+
+            console.log(`   Result: ${typeof result === 'string' ? result.substring(0, 200) : JSON.stringify(result).substring(0, 200)}...\n`);
+
+            (toolResults.content as any[]).push({
+              type: 'tool_result',
+              tool_use_id: block.id,
+              content: typeof result === 'string' ? result : JSON.stringify(result),
+            });
+          }
+        }
+
+        messages.push(
+          { role: 'assistant', content: response.content },
+          toolResults
+        );
+      } else {
+        break;
+      }
+    }
+
+    if (iteration >= this.maxIterations) {
+      console.log('\n⚠️  Max iterations reached. Agent did not complete.\n');
+      return 'Max iterations reached. Could not complete the task.';
+    }
+
+    return 'Agent stopped unexpectedly.';
+  }
+
+  private extractTextContent(content: Anthropic.ContentBlock[]): string {
+    return content
+      .filter((block) => block.type === 'text')
+      .map((block: any) => block.text)
+      .join('\n');
+  }
+}
