@@ -1,19 +1,23 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { AgentTools, toolDefinitions } from './tools/agentTools.js';
 
-const SYSTEM_PROMPT = `You are an API Self-Healing Agent. Your job is to automatically repair broken API requests in Postman collections.
+const SYSTEM_PROMPT = `You are an API Self-Healing Agent with learning capabilities. Your job is to automatically repair broken API requests in Postman collections, and you learn from past fixes to improve over time.
 
 Your workflow:
 1. Fetch the broken request from Postman using the collection_id and request_id
-2. Execute the request against the target API
-3. If it fails with an error (400, 404, 422 status codes):
+2. CHECK MEMORY FIRST using check_memory tool with the endpoint URL
+   - If a similar fix is found (similarity score < 0.5), apply the cached fix immediately
+   - If no match found or score too high, proceed to execute the original request
+3. Execute the request against the target API
+4. If it fails with an error (400, 404, 422 status codes):
    - IMMEDIATELY search the API documentation using Parallel AI - do this FIRST before attempting any fixes
    - Analyze the error response along with the documentation to understand what's wrong
    - Fix the request based on the documentation (headers, body, or URL path if needed)
    - Retry the request with the corrected format
-4. Repeat step 3 until the request succeeds
-5. Once successful, update the Postman collection with the corrected request
-6. After updating Postman successfully, explicitly state "Task completed successfully" to signal completion
+5. Repeat step 4 until the request succeeds
+6. Once successful, update the Postman collection with the corrected request
+7. IMPORTANT: After updating Postman, store the fix in memory using store_fix tool
+8. After storing the fix, explicitly state "Task completed successfully" to signal completion
 
 Important rules:
 - Fix format-related errors (malformed data, incorrect fields, validation errors, wrong endpoints)
@@ -30,10 +34,12 @@ Efficiency guidelines:
 - Documentation lookups are cheaper than trial-and-error - use them proactively
 
 You have access to these tools:
+- check_memory: Search for similar past errors and cached fixes (use FIRST after fetching)
 - fetch_postman_request: Get a request from Postman
 - execute_api_request: Execute an HTTP request
 - search_api_docs: Search API documentation via Parallel AI
-- update_postman_request: Save the fixed request back to Postman`;
+- update_postman_request: Save the fixed request back to Postman
+- store_fix: Store successful fixes in memory for future learning (use AFTER updating Postman)`;
 
 export class ApiSelfHealingAgent {
   private client: Anthropic;
@@ -60,11 +66,13 @@ export class ApiSelfHealingAgent {
 
 Follow your workflow to:
 1. Fetch the request
-2. Execute it to see what's wrong
-3. If it's a format error, search the docs and fix it
-4. Keep trying until it works
-5. Update Postman with the corrected version
-6. Signal completion when done
+2. Check memory for similar past fixes
+3. If cached fix found, apply it; otherwise execute to see what's wrong
+4. If it's a format error, search the docs and fix it
+5. Keep trying until it works
+6. Update Postman with the corrected version
+7. Store the fix in memory for future learning
+8. Signal completion when done
 
 Begin now.`;
 

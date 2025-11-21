@@ -1,6 +1,7 @@
 import { PostmanService } from '../services/postman.js';
 import { ParallelService } from '../services/parallel.js';
 import { HttpExecutor } from '../services/httpExecutor.js';
+import { MemoryService } from '../services/memory.js';
 
 export interface ToolDefinition {
   name: string;
@@ -13,6 +14,31 @@ export interface ToolDefinition {
 }
 
 export const toolDefinitions: ToolDefinition[] = [
+  {
+    name: 'check_memory',
+    description:
+      'Search memory for similar past errors and their successful fixes. Returns cached solutions if similar errors have been fixed before. Use this AFTER fetching the request but BEFORE executing it.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        endpoint: {
+          type: 'string',
+          description: 'The API endpoint URL that will be called',
+        },
+        error_message: {
+          type: 'string',
+          description:
+            'The error message from a failed request (empty string if not yet executed)',
+        },
+        status_code: {
+          type: 'number',
+          description:
+            'The HTTP status code from the error (0 if not yet executed)',
+        },
+      },
+      required: ['endpoint'],
+    },
+  },
   {
     name: 'fetch_postman_request',
     description: 'Fetches a specific API request from a Postman collection by its ID. Automatically handles both standard UUID format and composite IDs with workspace prefixes.',
@@ -89,17 +115,72 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['collection_id', 'request_id', 'updated_request_json'],
     },
   },
+  {
+    name: 'store_fix',
+    description:
+      'Store a successful fix in memory for future reference. Call this AFTER successfully updating Postman with a working fix. This helps the agent learn and improve over time.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        endpoint: {
+          type: 'string',
+          description: 'The API endpoint that was fixed',
+        },
+        method: {
+          type: 'string',
+          description: 'The HTTP method (GET, POST, etc.)',
+        },
+        status_code: {
+          type: 'number',
+          description: 'The original error status code',
+        },
+        error_message: {
+          type: 'string',
+          description: 'The original error message',
+        },
+        fix_description: {
+          type: 'string',
+          description: 'A brief description of what was fixed',
+        },
+        fix_type: {
+          type: 'string',
+          description: 'The type of fix applied: header, body, url, or validation',
+        },
+        corrected_request_json: {
+          type: 'string',
+          description: 'JSON string of the complete corrected request',
+        },
+      },
+      required: [
+        'endpoint',
+        'method',
+        'status_code',
+        'error_message',
+        'fix_description',
+        'fix_type',
+        'corrected_request_json',
+      ],
+    },
+  },
 ];
 
 export class AgentTools {
   constructor(
     private postmanService: PostmanService,
     private parallelService: ParallelService,
-    private httpExecutor: HttpExecutor
+    private httpExecutor: HttpExecutor,
+    private memoryService: MemoryService
   ) {}
 
   async executeTool(toolName: string, toolInput: any): Promise<any> {
     switch (toolName) {
+      case 'check_memory':
+        return this.checkMemory(
+          toolInput.endpoint,
+          toolInput.error_message || '',
+          toolInput.status_code || 0
+        );
+
       case 'fetch_postman_request':
         return this.fetchPostmanRequest(
           toolInput.collection_id,
@@ -117,6 +198,17 @@ export class AgentTools {
           toolInput.collection_id,
           toolInput.request_id,
           toolInput.updated_request_json
+        );
+
+      case 'store_fix':
+        return this.storeFix(
+          toolInput.endpoint,
+          toolInput.method,
+          toolInput.status_code,
+          toolInput.error_message,
+          toolInput.fix_description,
+          toolInput.fix_type,
+          toolInput.corrected_request_json
         );
 
       default:
@@ -197,6 +289,94 @@ export class AgentTools {
         message: 'Request updated successfully',
         collection_id: collectionId,
         request_id: requestId,
+      });
+    } catch (error) {
+      return JSON.stringify({
+        error: error instanceof Error ? error.message : String(error),
+        success: false,
+      });
+    }
+  }
+
+  private async checkMemory(
+    endpoint: string,
+    errorMessage: string,
+    statusCode: number
+  ): Promise<string> {
+    try {
+      const similarFixes = await this.memoryService.findSimilarFixes(
+        endpoint,
+        errorMessage,
+        statusCode,
+        3,
+        0.5
+      );
+
+      if (similarFixes.length === 0) {
+        return JSON.stringify({
+          found: false,
+          message: 'No similar fixes found in memory',
+          total_stored: await this.memoryService.getStoredFixCount(),
+        });
+      }
+
+      return JSON.stringify({
+        found: true,
+        message: `Found ${similarFixes.length} similar fix(es)`,
+        fixes: similarFixes.map((fix) => ({
+          endpoint: fix.endpoint,
+          method: fix.method,
+          original_error: {
+            status_code: fix.statusCode,
+            message: fix.errorMessage,
+          },
+          fix_applied: fix.fixApplied,
+          corrected_request: fix.correctedRequest,
+          similarity_score: fix.score,
+          timestamp: fix.timestamp,
+        })),
+      });
+    } catch (error) {
+      return JSON.stringify({
+        error: error instanceof Error ? error.message : String(error),
+        found: false,
+      });
+    }
+  }
+
+  private async storeFix(
+    endpoint: string,
+    method: string,
+    statusCode: number,
+    errorMessage: string,
+    fixDescription: string,
+    fixType: string,
+    correctedRequestJson: string
+  ): Promise<string> {
+    try {
+      const correctedRequest = JSON.parse(correctedRequestJson);
+
+      await this.memoryService.storeFix({
+        endpoint,
+        method,
+        statusCode,
+        errorMessage,
+        errorResponse: null,
+        fixApplied: {
+          type: fixType as 'header' | 'body' | 'url' | 'validation',
+          description: fixDescription,
+          changes: correctedRequest,
+        },
+        correctedRequest,
+        timestamp: new Date().toISOString(),
+      });
+
+      const totalStored = await this.memoryService.getStoredFixCount();
+
+      return JSON.stringify({
+        success: true,
+        message: 'Fix stored in memory successfully',
+        total_fixes_stored: totalStored,
       });
     } catch (error) {
       return JSON.stringify({

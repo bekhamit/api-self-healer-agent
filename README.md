@@ -1,6 +1,6 @@
 # API Self-Healing Agent
 
-An AI-powered agent that automatically repairs broken API calls in Postman collections. The agent uses Claude to intelligently diagnose format errors, search API documentation via Parallel AI, and iteratively fix requests until they succeed.
+An AI-powered agent with **learning capabilities** that automatically repairs broken API calls in Postman collections. The agent uses Claude to intelligently diagnose format errors, search API documentation via Parallel AI, and iteratively fix requests until they succeed. It learns from successful fixes and becomes faster over time using vector similarity search.
 
 ## Architecture
 
@@ -15,24 +15,42 @@ This is an **AI Agent** where Claude acts as the intelligent decision-maker:
 1. **Postman Integration** (`src/services/postman.ts`): Fetches and updates requests in Postman collections
 2. **Parallel AI Integration** (`src/services/parallel.ts`): Searches API documentation
 3. **HTTP Executor** (`src/services/httpExecutor.ts`): Executes API requests and analyzes responses
-4. **Agent Tools** (`src/tools/agentTools.ts`): Tool definitions and implementations for Claude
-5. **AI Agent** (`src/agent.ts`): Claude-powered agent that orchestrates the healing process
+4. **Memory Service** (`src/services/memory.ts`): Vector-based memory using Redis Stack for learning from past fixes
+5. **Agent Tools** (`src/tools/agentTools.ts`): Tool definitions and implementations for Claude
+6. **AI Agent** (`src/agent.ts`): Claude-powered agent that orchestrates the healing process
 
 ## How It Works
 
 1. **Fetch**: Agent retrieves the broken request from Postman
-2. **Execute**: Agent sends the request to the target API
-3. **Analyze**: If it fails with a format error (400/422), agent analyzes the error
-4. **Search**: Agent queries Parallel AI to understand the correct request format
-5. **Fix**: Agent rewrites the headers and body based on documentation
-6. **Retry**: Agent tests the fixed request
-7. **Update**: Once successful, agent saves the corrected request to Postman
+2. **Check Memory**: Agent searches for similar past errors using vector similarity
+   - If found: Apply cached fix immediately (skip to step 6)
+   - If not found: Proceed to execute the request
+3. **Execute**: Agent sends the request to the target API
+4. **Analyze**: If it fails with a format error (400/422), agent analyzes the error
+5. **Search**: Agent queries Parallel AI to understand the correct request format
+6. **Fix**: Agent rewrites the headers and body based on documentation
+7. **Retry**: Agent tests the fixed request
+8. **Update**: Once successful, agent saves the corrected request to Postman
+9. **Learn**: Agent stores the fix in vector memory for future use
+
+### Self-Improving Over Time
+
+The agent uses **Redis Stack** with vector similarity search to learn from successful fixes:
+
+- **First occurrence**: Takes full workflow (7-11 iterations)
+- **Second+ occurrence**: Instant fix from memory (2-3 iterations)
+- **Semantic matching**: Finds similar errors even with different wording
+- **768-dimensional embeddings**: Uses Xenova transformers for local semantic search
+- **L2 distance metric**: Measures similarity between error patterns
+
+The more you use it, the smarter it gets!
 
 ## Setup
 
 ### Prerequisites
 
 - Node.js 18+ and npm
+- Docker (for Redis Stack)
 - API keys for:
   - Anthropic (Claude)
   - Postman
@@ -51,16 +69,26 @@ This is an **AI Agent** where Claude acts as the intelligent decision-maker:
    npm install
    ```
 
-3. Configure environment variables:
+3. Start Redis Stack (for vector memory):
+   ```bash
+   docker-compose up -d
+   ```
+
+   This starts:
+   - Redis Stack on port 6379 (vector database)
+   - RedisInsight on port 8001 (optional web UI at http://localhost:8001)
+
+4. Configure environment variables:
    ```bash
    cp .env.example .env
    ```
 
-4. Edit `.env` and add your API keys:
+5. Edit `.env` and add your API keys:
    ```
    ANTHROPIC_API_KEY=your_anthropic_api_key
    POSTMAN_API_KEY=your_postman_api_key
    PARALLEL_API_KEY=your_parallel_api_key
+   REDIS_URL=redis://localhost:6379
    POSTMAN_COLLECTION_ID=your_collection_id
    POSTMAN_REQUEST_ID=your_request_id
    ```
@@ -166,16 +194,53 @@ All configuration is done via environment variables in `.env`:
 - `ANTHROPIC_API_KEY`: Your Claude API key (required)
 - `POSTMAN_API_KEY`: Your Postman API key (required)
 - `PARALLEL_API_KEY`: Your Parallel AI API key (required)
+- `REDIS_URL`: Redis connection URL (optional, defaults to redis://localhost:6379)
 - `POSTMAN_COLLECTION_ID`: Target collection ID (required)
 - `POSTMAN_REQUEST_ID`: Target request ID (required)
+
+### Memory Configuration
+
+The agent uses Redis Stack for vector similarity search. You can configure:
+
+- **Similarity threshold**: Default 0.5 (lower = stricter matching)
+- **Vector dimensions**: 768 (Xenova/all-distilroberta-v1)
+- **Distance metric**: L2 (Euclidean distance)
+- **Search results**: Top 3 most similar fixes
+
+To reset memory:
+```bash
+docker-compose down -v
+docker-compose up -d
+```
+
+## Performance
+
+### Iteration Reduction
+
+With self-improving memory:
+
+| Scenario | Before Memory | With Memory |
+|----------|--------------|-------------|
+| First occurrence | 7-11 iterations | 7-11 iterations |
+| Second occurrence | 7-11 iterations | 2-3 iterations |
+| Similar error | 7-11 iterations | 2-3 iterations |
+
+### Memory Growth
+
+The agent automatically stores every successful fix:
+- Endpoint + error pattern → fix mapping
+- Semantic embeddings for similarity search
+- Persistent across runs (Redis volumes)
+- Check memory count: View logs after each run
 
 ## Limitations
 
 - Currently only handles format errors (400/422 status codes)
 - Does not fix authentication errors
 - Does not modify HTTP method or URL
-- Maximum of 10 iterations per healing attempt
+- Maximum of 20 iterations per healing attempt
 - Only updates headers and body fields
+- Requires Redis Stack to be running
 
 ## Future Enhancements
 
@@ -184,6 +249,8 @@ All configuration is done via environment variables in `.env`:
 - Custom error type handling
 - Web UI for easier configuration
 - Support for more API documentation sources
+- Export/import memory for sharing between teams
+- Fine-tune similarity thresholds per endpoint
 
 ## License
 
