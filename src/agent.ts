@@ -11,8 +11,9 @@ Your workflow:
    - Search the API documentation using Parallel AI to find the correct format/endpoint
    - Fix the request (headers, body, or URL path if needed)
    - Retry the request
-4. Repeat step 3 until the request succeeds or you've tried 5 times
+4. Repeat step 3 until the request succeeds
 5. Once successful, update the Postman collection with the corrected request
+6. After updating Postman successfully, explicitly state "Task completed successfully" to signal completion
 
 Important rules:
 - Fix format-related errors (malformed data, incorrect fields, validation errors, wrong endpoints)
@@ -21,6 +22,12 @@ Important rules:
 - Do NOT fix authentication errors (401, 403) or server errors (500+)
 - Be methodical: analyze the error, search docs, make targeted fixes
 - Always explain what you're doing and why
+
+Efficiency guidelines:
+- Be efficient: don't retry identical requests without making changes
+- If you make the same error twice, search the documentation before trying again
+- Only use update_postman_request after confirming the request works (status code 200-299)
+- Avoid unnecessary tool calls - be strategic about when to search docs vs. retry
 
 You have access to these tools:
 - fetch_postman_request: Get a request from Postman
@@ -38,7 +45,7 @@ export class ApiSelfHealingAgent {
     anthropicApiKey: string,
     tools: AgentTools,
     model: string = 'claude-3-5-sonnet-20241022',
-    maxIterations: number = 10
+    maxIterations: number = 20
   ) {
     this.client = new Anthropic({ apiKey: anthropicApiKey });
     this.tools = tools;
@@ -55,8 +62,9 @@ Follow your workflow to:
 1. Fetch the request
 2. Execute it to see what's wrong
 3. If it's a format error, search the docs and fix it
-4. Keep trying until it works (max 5 attempts)
+4. Keep trying until it works
 5. Update Postman with the corrected version
+6. Signal completion when done
 
 Begin now.`;
 
@@ -91,6 +99,9 @@ Begin now.`;
           content: [],
         };
 
+        let lastToolName = '';
+        let lastToolResult: any = null;
+
         for (const block of response.content) {
           if (block.type === 'tool_use') {
             console.log(`🔧 Using tool: ${block.name}`);
@@ -100,11 +111,26 @@ Begin now.`;
 
             console.log(`   Result: ${typeof result === 'string' ? result.substring(0, 200) : JSON.stringify(result).substring(0, 200)}...\n`);
 
+            lastToolName = block.name;
+            lastToolResult = result;
+
             (toolResults.content as any[]).push({
               type: 'tool_result',
               tool_use_id: block.id,
               content: typeof result === 'string' ? result : JSON.stringify(result),
             });
+          }
+        }
+
+        // Check if we just successfully updated Postman - if so, task is complete
+        if (lastToolName === 'update_postman_request') {
+          const resultObj = typeof lastToolResult === 'string'
+            ? JSON.parse(lastToolResult)
+            : lastToolResult;
+
+          if (resultObj.success === true) {
+            console.log('\n✅ Agent completed successfully! Postman collection has been updated.\n');
+            return 'Task completed successfully. The API request has been fixed and updated in Postman.';
           }
         }
 

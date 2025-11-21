@@ -57,20 +57,32 @@ export class PostmanService {
   async getRequest(collectionId: string, requestId: string): Promise<PostmanRequest | null> {
     const collection = await this.getCollection(collectionId);
 
-    const findRequest = (items: any[]): PostmanRequest | null => {
+    const findRequest = (items: any[], targetId: string): PostmanRequest | null => {
       for (const item of items) {
-        if (item.id === requestId) {
+        if (item.id === targetId) {
           return item as PostmanRequest;
         }
         if (item.item && Array.isArray(item.item)) {
-          const found = findRequest(item.item);
+          const found = findRequest(item.item, targetId);
           if (found) return found;
         }
       }
       return null;
     };
 
-    return findRequest(collection.collection.item);
+    // Try exact match first
+    let result = findRequest(collection.collection.item, requestId);
+
+    // If not found and ID has 6 segments (composite format with workspace prefix),
+    // try stripping the first segment to get the UUID portion
+    if (!result && requestId.split('-').length === 6) {
+      const segments = requestId.split('-');
+      const uuidOnly = segments.slice(1).join('-');
+      console.log(`[Postman] Request not found with full ID, trying UUID portion: ${uuidOnly}`);
+      result = findRequest(collection.collection.item, uuidOnly);
+    }
+
+    return result;
   }
 
   async updateRequest(
@@ -85,9 +97,17 @@ export class PostmanService {
     const collection = await this.getCollection(collectionId);
     console.log('[Postman Update] Fetched collection:', collection.collection.info.name);
 
-    const updateInPlace = (items: any[]): boolean => {
+    // Normalize request ID if it has workspace prefix
+    let normalizedRequestId = requestId;
+    if (requestId.split('-').length === 6) {
+      const segments = requestId.split('-');
+      normalizedRequestId = segments.slice(1).join('-');
+      console.log('[Postman Update] Detected composite ID, using UUID portion:', normalizedRequestId);
+    }
+
+    const updateInPlace = (items: any[], targetId: string): boolean => {
       for (let i = 0; i < items.length; i++) {
-        if (items[i].id === requestId) {
+        if (items[i].id === targetId) {
           console.log('[Postman Update] Found request to update:', items[i].name);
           console.log('[Postman Update] Current URL:', items[i].request?.url?.raw || 'N/A');
           items[i] = { ...items[i], ...updatedRequest };
@@ -95,13 +115,13 @@ export class PostmanService {
           return true;
         }
         if (items[i].item && Array.isArray(items[i].item)) {
-          if (updateInPlace(items[i].item)) return true;
+          if (updateInPlace(items[i].item, targetId)) return true;
         }
       }
       return false;
     };
 
-    const updated = updateInPlace(collection.collection.item);
+    const updated = updateInPlace(collection.collection.item, normalizedRequestId);
     console.log('[Postman Update] Update in place result:', updated);
 
     if (!updated) {

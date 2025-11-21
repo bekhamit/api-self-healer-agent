@@ -15,7 +15,7 @@ export interface ToolDefinition {
 export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'fetch_postman_request',
-    description: 'Fetches a specific API request from a Postman collection by its ID',
+    description: 'Fetches a specific API request from a Postman collection by its ID. Automatically handles both standard UUID format and composite IDs with workspace prefixes.',
     input_schema: {
       type: 'object',
       properties: {
@@ -25,7 +25,7 @@ export const toolDefinitions: ToolDefinition[] = [
         },
         request_id: {
           type: 'string',
-          description: 'The specific request ID within the collection',
+          description: 'The specific request ID within the collection (supports both UUID and composite formats)',
         },
       },
       required: ['collection_id', 'request_id'],
@@ -69,7 +69,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'update_postman_request',
     description:
-      'Updates a request in a Postman collection with corrected headers and body',
+      'Updates a request in a Postman collection with corrected headers and body. Automatically handles both standard UUID format and composite IDs with workspace prefixes.',
     input_schema: {
       type: 'object',
       properties: {
@@ -79,7 +79,7 @@ export const toolDefinitions: ToolDefinition[] = [
         },
         request_id: {
           type: 'string',
-          description: 'The specific request ID to update',
+          description: 'The specific request ID to update (supports both UUID and composite formats)',
         },
         updated_request_json: {
           type: 'string',
